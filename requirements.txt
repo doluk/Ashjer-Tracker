@@ -1,0 +1,27 @@
+
+#
+###### Requirements with Version Specifiers ######
+#
+coc.py
+aiohttp
+apscheduler
+async-property
+asyncio
+asyncpg
+cached-property
+py-cord
+matching
+nest-asyncio
+pandas
+python-dateutil
+requests
+sqlalchemy
+Pillow
+numpy
+opencv-python
+imutils
+google
+aiogoogle
+aiofiles
+python-dotenv
+matplotlib
