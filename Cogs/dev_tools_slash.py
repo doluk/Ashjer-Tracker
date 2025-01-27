@@ -471,7 +471,7 @@ class dev_tools_slash(commands.Cog):
 
     @dev.command(guild_ids=bot.related_guilds)
     @perm.staff()
-    async def showcommands(self,ctx: discord.ApplicationContext):
+    async def showcommands(self, ctx: discord.ApplicationContext):
         embeds = []
         commands_outside_groups = []
         for cmd in await bot.client.http.get_guild_commands(bot.client.application_id, ctx.guild.id):

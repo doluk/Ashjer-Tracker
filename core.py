@@ -27,8 +27,6 @@ from utils.independent.webhook_error_handler import WebhookHandler
 from utils import db, errors
 from utils.independent import permissions as perm
 
-logging.basicConfig()
-logging.getLogger('apscheduler').setLevel(logging.DEBUG)
 
 logger = logging.getLogger('ct')
 

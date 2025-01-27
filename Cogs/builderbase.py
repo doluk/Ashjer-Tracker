@@ -1,15 +1,19 @@
+import datetime
 import os
+from typing import Literal
 
 import aiohttp
 import discord
+from discord import option
 
 from discord.ext import commands
 from discord.commands import Option, SlashCommandGroup
 from discord.ui import InputText, Modal
 
 from custom_dataclasses import Account, Datetime, Player
-from utils import errors
+from utils import errors, permissions as perm
 from utils.independent import db
+from utils.message_utils import Paginator
 
 
 class BuilderBase(commands.Cog):
@@ -19,109 +23,108 @@ class BuilderBase(commands.Cog):
     tracking_group = SlashCommandGroup("tracking", "Tracking commands")
     
     @tracking_group.command(name="versus_log", description="Logs between two accounts")
+    @perm.staff()
     @Account.option(name="account1")
     @Account.option(name="account2")
-    @Datetime.option("after")
-    @Datetime.option("before")
-    async def versus_log(self,
-                         ctx: discord.ApplicationContext,
-                         account1: Account,
-                         account2: Account,
-                         after: Datetime,
-                         before: Datetime,
-                         ):
-        # SELECT all the winners with their trophy change compared to the previous requested leaderboard
-        query = """WITH
-    winner_raw as (SELECT l.* from account_tracking_v2 l where date_trunc('min',requested_at) > $1 and ),
-	winners as (SELECT w1.account_tag as winner_tag, w1.account_name as winner_name, date_trunc('min',w1.requested_at) as
-	winner_last_request,
-	date_trunc('min',w2.requested_at) as
-	winner_second_last_request,
-	w1.builder_base_trophies - w2.builder_base_trophies as winner_diff from winner_raw w1 join winner_raw w2 on w1.account_tag =
-	w2.account_tag
-	and date_trunc('min',w1.requested_at) != date_trunc('min',w2.requested_at) where w1.builder_base_trophies > w2.builder_base_trophies
-	                                                                             and w1.requested_at > w2.requested_at),
-	losers as (SELECT w1.account_tag as loser_tag, w1.account_name as loser_name, date_trunc('min',w1.requested_at) as
-	loser_last_request, date_trunc('min',w2.requested_at) as
-	loser_second_last_request,
-	w2.builder_base_trophies - w1.builder_base_trophies as loser_diff,
-	w1.builder_base_trophies, w2.builder_base_trophies from winner_raw w1 join winner_raw w2 on w1.account_tag =
-	w2.account_tag
-	and date_trunc('min',w1.requested_at) != date_trunc('min',w2.requested_at) where w1.builder_base_trophies < w2.builder_base_trophies
-	                                                                           and w1.requested_at > w2.requested_at)
-    SELECT
-	w.*, l.loser_tag, l.loser_name from winners w join losers l on l.loser_diff = w.winner_diff and w.winner_last_request =
-	l.loser_last_request and
-	w.winner_second_last_request = l.loser_second_last_request
-	order by w.winner_tag, l.loser_tag, w.winner_diff
-    	"""
+    @Datetime.option(name="after", description="Show battles after this date", required=False)
+    @Datetime.option(name="before", description="Show battles before this date", required=False)
+    @option(name="filter_opponent", description="Filter the battles for known opponents", required=False,
+            choices=["all", "known opponents", "unknown opponents"], type=str, default="all")
+    @option(name="filter_battle", description="Filter the battles for attack/defense", required=False,
+            choices=["all", "attacks", "defenses"], type=str, default="all")
+    @option(name="limit", description="Limit for the shown battles", type=int, default=None, required=False)
+    async def account_battle_log(self,
+                                 ctx: discord.ApplicationContext,
+                                 account1: Account,
+                                 account2: Account,
+                                 after: Datetime = None,
+                                 before: Datetime = None,
+                                 filter_opponent: Literal["all", "known opponents", "unknown opponents"] = "all",
+                                 filter_battle: Literal["all", "attacks", "defenses"] = "all",
+                                 limit: int = None):
+        """View the battle log of an account"""
+        if after is None:
+            after = Datetime.now() - datetime.timedelta(days=2)
+        if before is None:
+            before = Datetime.now()
+        if limit is None:
+            limit = 5000
+        query = """WITH data as (SELECT account_tag, account_name, date_trunc('min', requested_at) as requested_at,
+                    builder_base_trophies_new as trophies_new, trophies_difference as trophies_diff from account_tracking_v3 where
+                    requested_at >= $2 and requested_at < $3)
+                    SELECT w1.account_name as p_name, w1.account_tag as p_tag, w1.requested_at,
+                     w1.trophies_new as p_trophies, w1.trophies_diff as p_trophies_diff,
+                     w2.account_name as s_name, w2.account_tag as s_tag, w2.trophies_new as s_trophies
+                     FROM data w1 left outer join data w2 on
+                    w1.requested_at = w2.requested_at and
+                    w1.account_tag !=
+                    w2.account_tag and w1.trophies_diff + w2.trophies_diff = 0 where w1.account_tag = $1 and w1.requested_at >= $2
+                    and w1.requested_at < $3 and w2.account_tag = $5 order by w1.requested_at desc LIMIT $4"""
+        if filter_opponent == "known opponents":
+            opponent_filter = "opponent_known"
+        
+        elif filter_opponent == "unknown opponents":
+            opponent_filter = "opponent_unknown"
+        else:
+            opponent_filter = None
         try:
-            matches = await db.fetch(query)
+            battles = await db.fetch(query, account1.tag, after, before, limit, account2.tag)
         except errors.NotFoundException:
-            return
-        output = {}
-        for m in matches:
-            w_name = discord.utils.escape_markdown(m.get('winner_name'))
-            l_name = discord.utils.escape_markdown(m.get('loser_name'))
-            first_request = Datetime.by_dt(m.get('winner_last_request'))
-            second_request = Datetime.by_dt(m.get('winner_second_last_request'))
-            try:
-                [winner_id] = await db.fetchrow('SELECT player_id from player_accounts where account_tag = $1', m.get('winner_tag'))
-            except errors.NotFoundException:
-                winner_id = None
-            try:
-                [loser_id] = await db.fetchrow('SELECT player_id from player_accounts where account_tag = $1', m.get('loser_tag'))
-            except errors.NotFoundException:
-                loser_id = None
-            key_str = f"{w_name} ({m.get('winner_tag')}"
-            if key_str not in output:
-                temp = []
-            else:
-                temp = output[key_str]
-            temp.append({
-                'winner': key_str,
-                'winner_id': winner_id,
-                'loser_id': loser_id,
-                'loser': f"{l_name} ({m.get('loser_tag')})",
-                'first_request': first_request,
-                'second_request': second_request,
-                'diff': m.get('winner_diff')
-            })
+            return await ctx.respond(embed=discord.Embed(title=f"No battles found for account {account1.tag} vs {account2.tag} "
+                                                               f"between {after.to_discord()} and {before.to_discord()}.",
+                                                         color=discord.Color.red()))
         embeds = []
-        for k, v in output.items():
-            title = f"{k}"
-            winner_id = v[0].get('winner_id')
-            if winner_id is not None:
-                title += f" ID {winner_id}"
-            
-            embed = discord.Embed(title=title,
-                                  color=discord.Color.yellow())
-            for t in v:
-                if t.get('winner_id') is not None and t.get('loser_id') is not None and t.get('winner_id') == t.get('loser_id'):
-                    player = await Player.by_id(t.get('winner_id'))
-                    embed = discord.Embed(title=title,
-                                          description=f"vs {t.get('loser')}\nBoth accounts belong to the same player "
-                                                      f"{discord.utils.escape_markdown(player.name)} ({player.id}).\n"
-                                                      f"Attack happened between {t.get('second_request').to_discord()} and"
-                                                      f" {t.get('first_request').to_discord()}.",
-                                          color=discord.Color.red())
-                    embeds.append(embed)
+        desc = f"Showing {len(battles)} battles between {after.to_discord()} and {before.to_discord()} with {filter_opponent}"
+        if filter_battle != "all":
+            desc += f" showing only {filter_battle}"
+        embed = discord.Embed(title=f"Battle log for account {account1.tag} ({account1.name}) vs {account2.tag} ({account2.name})",
+                              color=discord.Color.green(),
+                              description=desc)
+        for battle in battles:
+            if filter_opponent == "known opponents" and battle.get('s_tag') is None:
+                continue
+            elif filter_opponent == "unknown opponents" and battle.get('s_tag') is not None:
+                continue
+            p_name = discord.utils.escape_markdown(battle['p_name'])
+            s_name = discord.utils.escape_markdown(battle['s_name'] or "unknown")
+            p_tag = battle['p_tag']
+            s_tag = battle['s_tag'] or "unknown"
+            p_trophies = battle['p_trophies']
+            s_trophies = battle['s_trophies']
+            if battle.get('p_trophies_diff', 0) and battle.get('p_trophies_diff', 0) > 0:
+                field_name = f"Attack against {s_name}"
+                emoji_value = "➕"
+                if filter_battle == "defenses":
                     continue
-                if len(embed.fields) == 24:
-                    embeds.append(embeds)
-                    embed = discord.Embed(title=title,
-                                          color=discord.Color.yellow())
-                embed.add_field(name=f"vs {t.get('loser')}" + (f" ID {t.get('loser_id')}" if t.get('loser_id') else ""),
-                                value=f"{t.get('diff')} trophies\nAttack happened between {t.get('second_request').to_discord()} and"
-                                      f" {t.get('first_request').to_discord()}.",
-                                inline=False)
+            elif battle.get('p_trophies_diff', 0) and battle.get('p_trophies_diff', 0) < 0:
+                field_name = f"Defense against {s_name}"
+                emoji_value = "➖"
+                if filter_battle == "attacks":
+                    continue
+            else:
+                field_name = f"Battle against {s_name}"
+                emoji_value = "❓"
+            if battle.get('s_tag'):
+                field_name += f" ({s_tag}, 🏆{s_trophies})"
+            requested_at = Datetime.by_dt(battle.get('requested_at'))
+            field_value = (f"{requested_at.to_discord()}\n"
+                           f"🏆{p_trophies - battle.get('p_trophies_diff', 0)} {emoji_value} {battle.get('p_trophies_diff')} -> "
+                           f"{p_trophies}")
+            if len(embed.fields) > 23:
+                embeds.append(embed)
+                embed = discord.Embed(title=f"Battle log for account {account1.tag} ({account1.name}) vs {account2.tag} ({account2.name})",
+                                      color=discord.Color.green(),
+                                      description=desc)
+            embed.add_field(name=field_name, value=field_value, inline=False)
+        if len(embed.fields) > 0:
             embeds.append(embed)
-        # sendout embeds to webhook
-        async with aiohttp.ClientSession() as session:
-            webhook = discord.Webhook.from_url(os.getenv('DISCORD_WEBHOOK_LB_LOG_URL'), session=session)
-            # send the embeds in batches of 5
-            for i in range(0, len(embeds), 5):
-                await webhook.send(embeds=embeds[i:i + 5])
+        if len(embeds) == 0:
+            return await ctx.respond(embed=discord.Embed(title=f"No battles found for account {account1.tag} vs {account2.tag} "
+                                                               f"between {after.to_discord()} and {before.to_discord()} with "
+                                                               f"{filter_opponent}" +
+                                                               (f" showing only {filter_battle}" if filter_battle != "all" else ""),
+                                                         color=discord.Color.red()))
+        await Paginator(embeds, ctx).run()
     
 
 

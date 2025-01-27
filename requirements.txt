@@ -4,7 +4,7 @@
 #
 coc.py
 aiohttp
-apscheduler
+apscheduler==4.0.0a5
 async-property
 asyncio
 asyncpg

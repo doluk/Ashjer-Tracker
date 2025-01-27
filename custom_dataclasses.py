@@ -602,6 +602,7 @@ class Account(object):
         """Autocomplete an account name"""
         sets = []
         final_set = {}
+        value_as_tag = coc.utils.correct_tag(ctx.value or "") + "%"
         if filter_player and 'player' in ctx.options:
             option = ctx.options['player']
             try:
@@ -614,7 +615,7 @@ class Account(object):
                             "SELECT a.account_tag, account_name from accounts a "
                             "left outer join player_accounts pa on pa.account_tag = a.account_tag "
                             "left outer join players p on p.player_id = pa.player_id "
-                            "where CASE "
+                            "where (CASE "
                             "WHEN length($1) = 0  "
                             "THEN true "
                             "WHEN length($1) > 2  "
@@ -623,12 +624,12 @@ class Account(object):
                             "account_name) "
                             "ELSE similarity($1, account_name) > 0 or "
                             "levenshtein(lower($1), lower(account_name), 1, 4, 3) < length( "
-                            "account_name) END and ($2::bool is null or "
+                            "account_name) END or a.account_tag ilike $4) and ($2::bool is null or "
                             "a.tracking_active = $2) and p.player_id = $3 "
                             "ORDER BY similarity(account_name, $1) DESC,"
                             " ts_rank(a.ts, plainto_tsquery('simple', $1)) DESC,"
                             " levenshtein(lower($1), lower(account_name), 1, 4, 3), account_name LIMIT 25",
-                            ctx.value or "", filter_active, item.id)
+                            ctx.value or "", filter_active, item.id, value_as_tag)
                     temp = {Choice(name=f"{item.get('account_name')} [{item.get('account_tag')}]", 
                                    value=str(item.get('account_tag')))
                             for item in workers}
@@ -642,7 +643,7 @@ class Account(object):
         try:
             workers = await db.fetch(
                     "SELECT a.account_tag, account_name from accounts a "
-                    "where CASE "
+                    "where (CASE "
                     "WHEN length($1) = 0 "
                     "THEN true "
                     "WHEN length($1) > 2 "
@@ -650,12 +651,12 @@ class Account(object):
                     "levenshtein(lower($1), lower(account_name), 1, 4, 3) < length(account_name)"
                     "ELSE similarity($1, account_name) > 0 or "
                     "levenshtein(lower($1), lower(account_name), 1, 4, 3) < length("
-                    "account_name) END and ($2::bool is null or a.tracking_active = "
+                    "account_name) END or account_tag ilike $3) and ($2::bool is null or a.tracking_active = "
                     "$2) "
                     "ORDER BY similarity(account_name, $1) DESC, "
                     "ts_rank(a.ts, plainto_tsquery('simple', $1)) DESC,"
                     " levenshtein(lower($1), lower(account_name), 1, 4, 3), account_name LIMIT 25",
-                    ctx.value or "", filter_active)
+                    ctx.value or "", filter_active, value_as_tag)
             matches = {}
             for item in workers:
                 matches[item.get('account_tag')] = Choice(name=f"{item.get('account_name')} [{item.get('account_tag')}]", 

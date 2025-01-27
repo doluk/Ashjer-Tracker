@@ -79,16 +79,16 @@ def parse_delta(old: dict, new: dict):
     for k in new.keys():
         if not isinstance(new.get(k), int):
             continue
-        elif new.get(k) == old.get(k, 0):
-            result[k] = new[k] - old.get(k, 0)
-        elif new.get(k) > old.get(k, 0):
-            result[k] = new[k] - old.get(k, 0)
-        elif new.get(k) < old.get(k, 0) and k in ['trophies', 'bb_trophies']:
-            result[k] = new[k] - old.get(k, 0)
-        elif new.get(k) < old.get(k, 0) and k not in ['donations_requested', 'donations_received', 'cc_contributions']:
+        elif (new.get(k,0)or 0) == (old.get(k, 0) or 0):
+            result[k] = new[k] - (old.get(k, 0) or 0)
+        elif (new.get(k,0)or 0) > (old.get(k, 0)or 0):
+            result[k] = new[k] - (old.get(k, 0)or 0)
+        elif (new.get(k)or 0) < (old.get(k, 0)or 0)  and k in ['trophies', 'bb_trophies']:
+            result[k] = new[k] - (old.get(k, 0) or 0)
+        elif (new.get(k)or 0) < (old.get(k, 0) or 0) and k not in ['donations_requested', 'donations_received', 'cc_contributions']:
             result[k] = old.get(k, 0)
             messed_up_record = True
-        elif new.get(k) < old.get(k, 0):
+        elif (new.get(k) or 0) < (old.get(k, 0) or 0):
             result[k] = new[k]
         else:
             result[k] = 0
@@ -142,7 +142,23 @@ async def track_player(player_tag: str):
 		pass
 	except Exception as e:
 		bot.logger.error(f'Error inserting leaderboard player {player.tag}\n{traceback.format_exc()}')
-	delta = parse_delta(player_old, player_new)
+	if (player_new.get('builder_base_trophies', 0) or 0) != (player_old.get('builder_base_trophies', 0) or 0):
+		try:
+			await db.execute("INSERT INTO ashjer.public.account_tracking_v3 as a(account_tag, account_name, requested_at, "
+							 "builder_base_trophies_new, previously_requested_at, builder_base_trophies_old, trophies_difference) "
+							 "VALUES ($1, $2, $3::timestamptz,"
+							 " $4, $5::timestamptz, $6, $7)",
+							 player.tag, player.name, requested_at, player_new.get('builder_base_trophies', 0),
+							 player_old.get('requested_at'),
+							 player_old.get('builder_base_trophies', 0),
+							 player_new.get('builder_base_trophies', 0) - player_old.get('builder_base_trophies', 0))
+		except Exception as e:
+			bot.logger.error(f'Error inserting leaderboard player {player.tag}\n{traceback.format_exc()}')
+	try:
+		delta = parse_delta(player_old, player_new)
+	except Exception as e:
+		bot.logger.error(f"{e=} {traceback.format_exc()}\n{player_old=}\n{player_new=}")
+		delta = {}
 	if any([x != 0 for x in delta.values() if isinstance(x, int)]) or delta.get('messed_up_record'):
 		try:
 			await db.execute('INSERT INTO account_tracking(account_tag, first_observed, requested_at, builder_hall_level, '

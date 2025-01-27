@@ -55,4 +55,12 @@ CREATE TABLE IF NOT EXISTS public.account_tracking_v2 (
 CREATE INDEX IF NOT EXISTS leaderboards_requested_at_idx ON public.leaderboards (requested_at);
 CREATE INDEX IF NOT EXISTS leaderboards_tag_idx ON public.leaderboards (account_tag);
 CREATE INDEX IF NOT EXISTS leaderboards_ranking_idx ON public.leaderboards (requested_at, current_rank);
-
+CREATE TABLE IF NOT EXISTS public.account_tracking_v3 (
+    account_tag text not null, -- tag
+    account_name text not null,
+    requested_at TIMESTAMP with time zone not null,
+    builder_base_trophies_new int not null, -- builderBaseTrophies
+    previously_requested_at TIMESTAMPTZ not null,
+    builder_base_trophies_old int not null,
+    trophies_difference int not null
+);
